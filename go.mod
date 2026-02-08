@@ -3,8 +3,7 @@ module github.com/fr0der1c/readform
 go 1.21.5
 
 require (
-	github.com/chromedp/cdproto v0.0.0-20231011050154-1d073bb38998
-	github.com/chromedp/chromedp v0.9.3
+	github.com/chromedp/chromedp v0.13.2
 	github.com/fatih/color v1.16.0
 	github.com/gorilla/mux v1.8.1
 	github.com/mmcdole/gofeed v1.2.1

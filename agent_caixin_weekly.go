@@ -53,7 +53,7 @@ func (a *Caixin) DiscoverArticleURLs(agent *WebsiteAgent, isFirstRun bool) (Cust
 		}
 	}
 
-	urls, err := a.discoverCaixinWeeklyArticleURLs()
+	urls, err := a.discoverCaixinWeeklyArticleURLs(agent)
 	if err != nil {
 		return CustomDiscoveryResult{}, err
 	}
@@ -127,7 +127,7 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 	return nil
 }
 
-func (a *Caixin) discoverCaixinWeeklyArticleURLs() ([]string, error) {
+func (a *Caixin) discoverCaixinWeeklyArticleURLs(agent *WebsiteAgent) ([]string, error) {
 	weeklyIssues, err := a.fetchCaixinWeeklyIssues()
 	if err != nil {
 		return nil, err
