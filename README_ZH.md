@@ -56,6 +56,42 @@ Readform 不是基于云的服务，您需要在自己的机器上运行它。�
    ![Readform screenshot](./screenshot.png)
 3. 一切就绪。新文章将出现在您的 Reader 的 feed 流中。如果它并没有如期工作，您可以使用 `docker logs readform` 命令检查日志，因为本项目仍处于萌芽阶段，并且可能包含 bug。 如果您看到任何异常日志/崩溃/文章不全的情况，请随时通过 GitHub issue 反馈！
 
+## 在 macOS 上构建与校验（仅 amd64）
+Readform 的 Docker 镜像目标平台为 `linux/amd64`。在 Apple Silicon 上通过 Docker 模拟运行属于正常行为。
+
+1. 先从已提交的 `HEAD` 回退依赖清单：
+     ```
+     git restore --source=HEAD -- go.mod go.sum
+     ```
+2. 在受控的 Go 容器中重新同步并校验依赖：
+     ```
+     docker run --rm \
+       --platform linux/amd64 \
+       --user "$(id -u):$(id -g)" \
+       -e GOPROXY="https://proxy.golang.org,direct" \
+       -e GOSUMDB="sum.golang.org" \
+       -e GOMODCACHE="/tmp/gomodcache" \
+       -e GOCACHE="/tmp/gocache" \
+       -v "$PWD":/src \
+       -w /src \
+       golang:1.21-bullseye \
+       sh -c 'mkdir -p "$GOMODCACHE" "$GOCACHE" && command -v go && go version && go mod tidy && go mod download && go mod verify'
+     ```
+3. 显式按 amd64 构建镜像：
+     ```
+     docker build --platform linux/amd64 --no-cache --progress=plain -t readform:weekly-test .
+     ```
+4. 或使用内置校验脚本：
+     ```
+     ./scripts/verify.sh
+     ```
+
+默认 `go test ./...` 会跳过需要浏览器账号登录的集成测试。若需要运行集成测试，请显式指定：
+
+```
+go test -tags integration ./...
+```
+
 ## FAQ
 ### 使用此程序需要订阅吗？
 这个项目是完全免费和开源的。 但是，**您需要成为网站的订户才能获得完整的文章内容**。 我们不直接提供帐户或完整的文章内容，因为媒体网站和作者都需要获得经济支持以继续前进。

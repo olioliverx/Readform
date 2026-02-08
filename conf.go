@@ -16,7 +16,6 @@ const (
 	ConfKeyReaderLocation  = "reader_location"
 	ConfKeySaveFirstFetch  = "save_first_fetch"
 	ConfKeyEnabledWebsites = "enabled_websites"
-	ConfFile               = "data/conf.json"
 
 	AgentConfUsername               = "username"
 	AgentConfPassword               = "password"
@@ -33,6 +32,8 @@ const (
 	GlobalConfigSectionName = "global"
 	GlobalConfigDisplayName = "Global config"
 )
+
+var ConfFile = "data/conf.json"
 
 type AgentConf struct {
 	Username           string   `json:"username"`

@@ -53,6 +53,42 @@ Running in Docker is the recommended way to use Readform. If you don't have Dock
    ![Readform screenshot](./screenshot.png)
 3. You're all set. New articles will now appear in your Reader feed section. If you encounter any issues, you can check the logs using the `docker logs readform` command. As this is a relatively new project, it may contain some bugs. If you notice any abnormal logs, crashes, or partial content, please don't hesitate to submit an issue!
 
+## Build and verify on macOS (amd64-only)
+Readform Docker image targets `linux/amd64`. On Apple Silicon this runs through Docker emulation, which is expected.
+
+1. Rebaseline module manifests from committed `HEAD`:
+    ```commandline
+    git restore --source=HEAD -- go.mod go.sum
+    ```
+2. Re-sync and verify modules in a controlled Go container:
+    ```commandline
+    docker run --rm \
+      --platform linux/amd64 \
+      --user "$(id -u):$(id -g)" \
+      -e GOPROXY="https://proxy.golang.org,direct" \
+      -e GOSUMDB="sum.golang.org" \
+      -e GOMODCACHE="/tmp/gomodcache" \
+      -e GOCACHE="/tmp/gocache" \
+      -v "$PWD":/src \
+      -w /src \
+      golang:1.21-bullseye \
+      sh -c 'mkdir -p "$GOMODCACHE" "$GOCACHE" && command -v go && go version && go mod tidy && go mod download && go mod verify'
+    ```
+3. Build image explicitly for amd64:
+    ```commandline
+    docker build --platform linux/amd64 --no-cache --progress=plain -t readform:weekly-test .
+    ```
+4. Or run the built-in verification script:
+    ```commandline
+    ./scripts/verify.sh
+    ```
+
+Default `go test ./...` skips browser credential integration tests. Run integration tests explicitly with:
+
+```commandline
+go test -tags integration ./...
+```
+
 ## FAQ
 ### Is a subscription required for using this program?
 This project is entirely free and open source. However, it's important to note that **you must be a subscriber to a website to access its full article content**. We do not directly provide accounts or full article content, as it's crucial to financially support the press and authors to ensure their continued operations.

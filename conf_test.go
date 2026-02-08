@@ -4,10 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	. "github.com/smartystreets/goconvey/convey"
+	"path/filepath"
 	"testing"
 )
 
 func TestConf(t *testing.T) {
+	origConfFile := ConfFile
+	ConfFile = filepath.Join(t.TempDir(), "conf.json")
+	defer func() {
+		ConfFile = origConfFile
+	}()
+
 	Convey("TestConf", t, func() {
 		// load
 		conf, err := LoadConfFromFile()
