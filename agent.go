@@ -33,6 +33,7 @@ type WebsiteAgent struct {
 	driverLock          sync.Mutex
 	retryChan           chan RetryItem
 	closeChan           chan struct{}
+	closeOnce           sync.Once
 }
 
 type RetryItem struct {
@@ -108,14 +109,22 @@ func (a *WebsiteAgent) Init(ctx context.Context, cancelFunc context.CancelFunc, 
 
 	a.retryChan = make(chan RetryItem, 10)
 	a.closeChan = make(chan struct{})
+	a.closeOnce = sync.Once{}
 	return nil
 }
 
 func (a *WebsiteAgent) Shutdown() error {
-	// not sure what will happen if not cancelled
-	a.closeChan <- struct{}{} // send close signal to rss fresh goroutine
-	a.ctxCancelFunc()
-	a.allocatorCancelFunc()
+	a.closeOnce.Do(func() {
+		if a.closeChan != nil {
+			close(a.closeChan)
+		}
+	})
+	if a.ctxCancelFunc != nil {
+		a.ctxCancelFunc()
+	}
+	if a.allocatorCancelFunc != nil {
+		a.allocatorCancelFunc()
+	}
 	return nil
 }
 
@@ -361,14 +370,15 @@ func (a *WebsiteAgent) StartRefreshingRSS() {
 				// continue refreshing RSS
 			}
 
-			logger.Infof("[%s] start to refresh RSS", a.Name())
-			articleURLs, err := a.refreshRSS()
+			logger.Infof("[%s] start to refresh source", a.Name())
+			articleURLs, forceProcessFirstFetch, err := a.discoverArticleURLs(isFirstRun)
 			if err != nil {
-				logger.Errorf("[%s] refreshRSS failed: %s", a.Name(), err.Error())
+				logger.Errorf("[%s] source refresh failed: %s", a.Name(), err.Error())
 				time.Sleep(10 * time.Second)
 				continue
 			}
-			if len(articleURLs) > 0 && (!isFirstRun || (isFirstRun && currentConf.SaveFirstFetch)) {
+			shouldSaveThisRound := !isFirstRun || currentConf.SaveFirstFetch || forceProcessFirstFetch
+			if len(articleURLs) > 0 && shouldSaveThisRound {
 				logger.Infof("[%s] latest articles: %v", a.Name(), articleURLs)
 				for _, url := range articleURLs {
 					err := a.HandleArticle(url)
@@ -392,7 +402,7 @@ func (a *WebsiteAgent) StartRefreshingRSS() {
 					}
 				}
 			}
-			if isFirstRun && !currentConf.SaveFirstFetch {
+			if isFirstRun && !currentConf.SaveFirstFetch && !forceProcessFirstFetch {
 				// mark all as saved
 				for _, articleURL := range articleURLs {
 					err := markURLAsSaved(articleURL, a.Name(), "")
@@ -400,10 +410,12 @@ func (a *WebsiteAgent) StartRefreshingRSS() {
 						logger.Errorf("[%s] markURLAsSaved failed: %s", a.Name(), err)
 					}
 				}
+			}
+			if isFirstRun {
 				isFirstRun = false
 			}
 
-			logger.Infof("[%s] Finished a round of RSS fetch. Sleep 60s.", a.Name())
+			logger.Infof("[%s] Finished a round of source fetch. Sleep 60s.", a.Name())
 			time.Sleep(60 * time.Second)
 
 			// retry items from retry queue after each RSS refresh
@@ -436,6 +448,20 @@ func (a *WebsiteAgent) StartRefreshingRSS() {
 		}
 
 	}()
+}
+
+func (a *WebsiteAgent) discoverArticleURLs(isFirstRun bool) ([]string, bool, error) {
+	customDiscoverer, ok := a.iWebsiteAgent.(iCustomArticleDiscoverer)
+	if !ok {
+		urls, err := a.refreshRSS()
+		return urls, false, err
+	}
+
+	result, err := customDiscoverer.DiscoverArticleURLs(a, isFirstRun)
+	if err != nil {
+		return nil, false, err
+	}
+	return result.URLs, result.ForceProcessFirstFetch, nil
 }
 
 const CookiePathPrefix = "data/cookie_"
@@ -484,7 +510,7 @@ func (a *WebsiteAgent) readCookies() ([]*network.Cookie, error) {
 
 func (a *WebsiteAgent) getTitleBlockedKeywords() []string {
 	kw := make([]string, 0, len(a.conf.TitleBlockKeywords))
-	for _, item := range kw {
+	for _, item := range a.conf.TitleBlockKeywords {
 		kw = append(kw, strings.ToLower(item))
 	}
 	return kw

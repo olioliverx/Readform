@@ -24,6 +24,11 @@ const (
 	AgentConfKeyRSSLinks            = "rss_links"
 	AgentConfLoginMethod            = "login_method"
 	AgentConfIncludePremiumArticles = "include_premium_articles"
+	AgentConfCaixinContentMode      = "caixin_content_mode"
+	AgentConfCaixinWeeklyBootstrap  = "caixin_weekly_bootstrap_last_issue_once"
+
+	CaixinContentModeLatest     = "latest"
+	CaixinContentModeWeeklyOnly = "weekly_only"
 
 	GlobalConfigSectionName = "global"
 	GlobalConfigDisplayName = "Global config"
@@ -37,6 +42,8 @@ type AgentConf struct {
 
 	// Caixin
 	IncludePremiumArticles bool `json:"include_premium_articles"`
+	CaixinContentMode      string `json:"caixin_content_mode"`
+	CaixinWeeklyBootstrap  bool   `json:"caixin_weekly_bootstrap_last_issue_once"`
 
 	//FT
 	LoginMethod string `json:"login_method"`
@@ -243,5 +250,36 @@ func LoadConfFromFile() (*ReadformConf, error) {
 		// Config file is not valid JSON, it will be overwritten with default configuration.
 		return conf, err
 	}
+
+	// Keep backward compatibility with old conf files that do not have newly added fields.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		applyLegacyConfDefaults(conf, raw)
+	}
 	return conf, nil
+}
+
+func applyLegacyConfDefaults(conf *ReadformConf, raw map[string]interface{}) {
+	agentRaw, ok := raw["agent"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	caixinConf := conf.AgentConfs["caixin"]
+	if caixinConf == nil {
+		return
+	}
+
+	caixinRaw, ok := agentRaw["caixin"].(map[string]interface{})
+	if !ok {
+		// Existing conf has no caixin section in file. Use defaults when user enables it.
+		return
+	}
+
+	if _, hasMode := caixinRaw[AgentConfCaixinContentMode]; !hasMode {
+		caixinConf.CaixinContentMode = CaixinContentModeLatest
+	}
+	if _, hasBootstrap := caixinRaw[AgentConfCaixinWeeklyBootstrap]; !hasBootstrap {
+		caixinConf.CaixinWeeklyBootstrap = true
+	}
 }

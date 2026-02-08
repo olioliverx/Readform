@@ -7,6 +7,8 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -56,6 +58,26 @@ func (a *Caixin) ConfOptions() []ConfMeta {
 			Required:          false,
 		},
 		{
+			ConfigName:        "Caixin content mode",
+			ConfigDescription: "latest keeps legacy RSS-only behavior. weekly_only ingests previous complete weekly issue once, then syncs newer weekly issues.",
+			ConfigKey:         AgentConfCaixinContentMode,
+			Type:              FieldTypeRadio,
+			SelectOptions: []SelectOption{
+				{Value: CaixinContentModeLatest, DisplayName: "Latest (legacy RSS)"},
+				{Value: CaixinContentModeWeeklyOnly, DisplayName: "Weekly only"},
+			},
+			DefaultValue: CaixinContentModeLatest,
+			Required:     true,
+		},
+		{
+			ConfigName:        "Bootstrap previous weekly issue once",
+			ConfigDescription: "When enabled in weekly_only mode, first startup ingests the previous complete weekly issue once as a verification batch.",
+			ConfigKey:         AgentConfCaixinWeeklyBootstrap,
+			Type:              FieldTypeBool,
+			DefaultValue:      TrueLiteral,
+			Required:          true,
+		},
+		{
 			ConfigName:        "Include data-pass(数据通) articles",
 			ConfigDescription: "This requires higher level of subscription. Default is false.",
 			ConfigKey:         AgentConfIncludePremiumArticles,
@@ -93,7 +115,16 @@ func (a *Caixin) RequireScrolling() bool {
 
 func (a *Caixin) Init(conf *AgentConf) error {
 	a.paywallLocator = "#chargeWallContent"
+	if conf == nil {
+		conf = &AgentConf{
+			CaixinContentMode:     CaixinContentModeLatest,
+			CaixinWeeklyBootstrap: true,
+		}
+	}
 	a.conf = conf
+	if a.conf.CaixinContentMode == "" {
+		a.conf.CaixinContentMode = CaixinContentModeLatest
+	}
 	return nil
 }
 
@@ -145,7 +176,7 @@ func (a *Caixin) EnsureLoggedIn(ctx context.Context) error {
 		logger.Infof("is paywalled content and not logged-in")
 
 		err = chromedp.Run(ctx, chromedp.Tasks{
-			chromedp.Navigate(`https://u.caixin.com/web/login`),
+			chromedp.Navigate(caixinLoginURL),
 			browser.WaitUntilDocumentReady(),
 		})
 		if err != nil {
@@ -217,77 +248,111 @@ func (a *Caixin) login(ctx context.Context) error {
 	if password == "" {
 		return errors.New("password is empty, cannot proceed")
 	}
+
+	runStep := func(step string, actions ...chromedp.Action) error {
+		if err := chromedp.Run(ctx, actions...); err != nil {
+			return a.wrapStepErrWithScreenshot(ctx, step, err)
+		}
+		return nil
+	}
+
 	logger.Infof("next step: waiting icon to be visible")
-	err := chromedp.Run(ctx,
+	err := runStep("wait_login_icon_visible",
 		chromedp.WaitVisible(`#app > div > section > div > div:nth-child(1) > div > div > span > svg > use`),
 	)
 	if err != nil {
-		return fmt.Errorf("wait icon visible failed: %w", err)
+		return err
 	}
-	err = chromedp.Run(ctx,
+	err = runStep("click_login_method_icon",
 		chromedp.Click(`#app > div > section > div > div:nth-child(1) > div > div > span > svg > use`),
 	)
 	if err != nil {
-		return fmt.Errorf("click icon failed: %w", err)
+		return err
 	}
 	logger.Infof("next step: wait mobile input to be visible")
-	err = chromedp.Run(ctx,
+	err = runStep("wait_mobile_input_visible",
 		chromedp.WaitVisible(`input[name='mobile']`),
 	)
 	if err != nil {
-		return fmt.Errorf("wait mobilt input visible failed: %w", err)
+		return err
 	}
-	err = chromedp.Run(ctx,
+	err = runStep("focus_mobile_input",
 		chromedp.Focus(`input[name='mobile']`),
 	)
 	if err != nil {
-		return fmt.Errorf("focus mobile input failed: %w", err)
+		return err
 	}
 	logger.Infof("next step: clear mobile input")
-	err = chromedp.Run(ctx,
+	err = runStep("clear_mobile_input",
 		chromedp.Evaluate(`document.querySelector("input[name='mobile']").value = ""`, nil),
 	)
 	if err != nil {
-		return fmt.Errorf("clear mobile input failed: %w", err)
+		return err
 	}
 	logger.Infof("next step: sending mobile number")
-	err = chromedp.Run(ctx,
+	err = runStep("input_mobile_number",
 		chromedp.SendKeys(`input[name='mobile']`, username),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
-		return fmt.Errorf("input mobile number failed: %w", err)
+		return err
 	}
 	logger.Infof("next step: send password")
-	err = chromedp.Run(ctx,
+	err = runStep("input_password",
 		chromedp.SendKeys(`input[name='password']`, password),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
-		return fmt.Errorf("input password failed: %w", err)
+		return err
 	}
-	err = chromedp.Run(ctx,
+	err = runStep("click_agreement_checkbox",
 		chromedp.Click(`#app > div > section > div > div.cx-login-argree > label > span > span`),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
-		return fmt.Errorf("click agreement failed: %w", err)
+		return err
 	}
 	logger.Infof("next step: click login button")
-	err = chromedp.Run(ctx,
+	err = runStep("click_login_button",
 		chromedp.Click(`button.login-btn`),
 	)
 	if err != nil {
-		return fmt.Errorf("click login button failed: %w", err)
+		return err
 	}
-	err = chromedp.Run(ctx,
+	err = runStep("wait_login_button_disappear",
 		chromedp.WaitNotPresent(`button.login-btn`),
 	)
 	if err != nil {
-		return fmt.Errorf("wait login button to disappear failed: %w", err)
+		return err
 	}
 
 	return nil
+}
+
+func (a *Caixin) wrapStepErrWithScreenshot(ctx context.Context, step string, err error) error {
+	screenshotPath, screenshotErr := a.captureDiagnosticScreenshot(ctx, "caixin_"+step)
+	if screenshotErr != nil {
+		return fmt.Errorf("%s failed: %w (also failed to capture screenshot: %v)", step, err, screenshotErr)
+	}
+	return fmt.Errorf("%s failed: %w (screenshot: %s)", step, err, screenshotPath)
+}
+
+func (a *Caixin) captureDiagnosticScreenshot(ctx context.Context, prefix string) (string, error) {
+	var image []byte
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&image, 90)); err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll("data/diagnostics", 0755); err != nil {
+		return "", err
+	}
+
+	fileName := fmt.Sprintf("%s_%s.png", prefix, time.Now().Format("20060102_150405"))
+	filePath := filepath.Join("data/diagnostics", fileName)
+	if err := os.WriteFile(filePath, image, 0644); err != nil {
+		return "", err
+	}
+	return filePath, nil
 }
 
 func (a *Caixin) EventListener(ctx context.Context) func(ev interface{}) {

@@ -21,3 +21,13 @@ type iWebsiteAgent interface {
 	EnsureLoggedIn(ctx context.Context) error             // make sure login status
 	EventListener(ctx context.Context) func(ev interface{})
 }
+
+type CustomDiscoveryResult struct {
+	URLs                  []string
+	ForceProcessFirstFetch bool
+}
+
+// iCustomArticleDiscoverer allows an agent to override default RSS-only discovery logic.
+type iCustomArticleDiscoverer interface {
+	DiscoverArticleURLs(agent *WebsiteAgent, isFirstRun bool) (CustomDiscoveryResult, error)
+}

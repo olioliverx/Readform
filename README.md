@@ -26,6 +26,16 @@ The ultimate aim of this project is to encourage these websites to offer officia
 ## How it works
 The program continuously retrieves the latest articles using the website's official RSS feed (or 3rd party RSS feed link, if no official RSS is provided). When new articles are detected, it emulates a browser and logs in with your credentials to access the full HTML content. Any lazy-loading images will be appropriately managed, ensuring no images are missing. The program will then forward the article URL and its HTML content to Readwise Reader via the official Reader API, making them available in your feed section.
 
+## Caixin weekly mode
+Caixin now supports two content modes:
+
+- `latest` (default): legacy RSS-based behavior (`https://rsshub.app/caixin/latest`).
+- `weekly_only`: first startup sets the current issue as baseline, ingests the previous complete issue once, then keeps ingesting newer weekly issues.
+
+When `weekly_only` is enabled, issue completeness is tracked in local database and unsaved articles are retried until all links in an issue are saved to Readwise.
+
+For login safety, startup includes a Caixin login preflight check (phone/password selectors). If login steps fail due page changes, a diagnostic screenshot will be written under `data/diagnostics/`.
+
 
 ## Quick start
 Readform is not a cloud-based service; rather, it operates on your own device. This approach ensures maximum security, as your username and password are required to use the program. You can install Readform on a local device such as a PC, Mac, NAS, Raspberry Pi, etc., or you can deploy it on a Virtual Private Server (VPS).
