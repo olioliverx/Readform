@@ -252,7 +252,7 @@ func (a *Caixin) discoverCaixinWeeklyArticleURLs(agent *WebsiteAgent) ([]string,
 		}
 	}
 
-	issuePendingURLs, err := a.collectUnsavedArticlesFromTrackedIssues(weeklyIssuesByID)
+	issuePendingURLs, err := a.collectUnsavedArticlesFromTrackedIssues(agent, weeklyIssuesByID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +261,7 @@ func (a *Caixin) discoverCaixinWeeklyArticleURLs(agent *WebsiteAgent) ([]string,
 	if err != nil {
 		logger.Warnf("[caixin] weekly RSS discovery failed, continue with crawler-only: %v", err)
 	}
+	logger.Infof("[caixin] weekly discovery candidates: issue_crawler=%d rss=%d", len(issuePendingURLs), len(rssPendingURLs))
 
 	return UniqStringSlice(append(issuePendingURLs, rssPendingURLs...)), nil
 }
@@ -324,7 +325,7 @@ func (a *Caixin) issueMetaToDB(issue caixinWeeklyIssueMeta) *CaixinWeeklyIssue {
 	}
 }
 
-func (a *Caixin) collectUnsavedArticlesFromTrackedIssues(issueMetaMap map[string]caixinWeeklyIssueMeta) ([]string, error) {
+func (a *Caixin) collectUnsavedArticlesFromTrackedIssues(agent *WebsiteAgent, issueMetaMap map[string]caixinWeeklyIssueMeta) ([]string, error) {
 	issues, err := listCaixinWeeklyIssuesNeedingSync()
 	if err != nil {
 		return nil, err
@@ -344,7 +345,7 @@ func (a *Caixin) collectUnsavedArticlesFromTrackedIssues(issueMetaMap map[string
 			continue
 		}
 
-		issueArticleURLs, err := a.fetchCaixinWeeklyIssueArticleURLs(issue.IssueURL)
+		issueArticleURLs, err := a.fetchCaixinWeeklyIssueArticleURLs(agent, issue.IssueURL)
 		if err != nil {
 			if updateErr := updateCaixinWeeklyIssueStatus(issue.IssueID, CaixinWeeklyIssueStatusIncomplete, err.Error()); updateErr != nil {
 				return nil, updateErr
@@ -396,12 +397,41 @@ func (a *Caixin) fetchCaixinWeeklyIssues() ([]caixinWeeklyIssueMeta, error) {
 	return issues, nil
 }
 
-func (a *Caixin) fetchCaixinWeeklyIssueArticleURLs(issueURL string) ([]string, error) {
+func (a *Caixin) fetchCaixinWeeklyIssueArticleURLs(agent *WebsiteAgent, issueURL string) ([]string, error) {
 	htmlContent, err := fetchWebpageContent(issueURL)
 	if err != nil {
 		return nil, err
 	}
-	return parseCaixinWeeklyIssueArticleURLs(htmlContent, issueURL)
+	urls, err := parseCaixinWeeklyIssueArticleURLs(htmlContent, issueURL)
+	if err != nil {
+		return nil, err
+	}
+	if len(urls) > 0 || agent == nil {
+		return urls, nil
+	}
+	// Weekly issue pages can be JS-rendered; fallback to browser-rendered HTML.
+	return a.fetchCaixinWeeklyIssueArticleURLsByBrowser(agent, issueURL)
+}
+
+func (a *Caixin) fetchCaixinWeeklyIssueArticleURLsByBrowser(agent *WebsiteAgent, issueURL string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(agent.ctx, 45*time.Second)
+	defer cancel()
+
+	tabCtx, tabCancel := chromedp.NewContext(ctx)
+	defer tabCancel()
+
+	var renderedHTML string
+	if err := chromedp.Run(tabCtx,
+		chromedp.Navigate(issueURL),
+		browser.WaitUntilDocumentReady(),
+		chromedp.Sleep(2500*time.Millisecond),
+		chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil),
+		chromedp.Sleep(1200*time.Millisecond),
+		chromedp.OuterHTML("html", &renderedHTML),
+	); err != nil {
+		return nil, err
+	}
+	return parseCaixinWeeklyIssueArticleURLs(renderedHTML, issueURL)
 }
 
 func (a *Caixin) discoverCaixinWeeklyRSSURLs(agent *WebsiteAgent) ([]string, error) {
@@ -427,7 +457,7 @@ func (a *Caixin) discoverCaixinWeeklyRSSURLs(agent *WebsiteAgent) ([]string, err
 				continue
 			}
 			if isLikelyCaixinWeeklyIssueURL(link) {
-				issueArticleURLs, issueErr := a.fetchCaixinWeeklyIssueArticleURLs(link)
+				issueArticleURLs, issueErr := a.fetchCaixinWeeklyIssueArticleURLs(agent, link)
 				if issueErr != nil {
 					logger.Warnf("[caixin] expand weekly issue link failed (%s): %v", link, issueErr)
 					continue
