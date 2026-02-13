@@ -111,6 +111,15 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 		return err
 	}
 
+	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
+	if err := runStep("login_preflight_switch_to_password",
+		chromedp.WaitVisible(`//h6[contains(text(), '其他方式登录')]`),
+		chromedp.Click(`//h6[contains(text(), '其他方式登录')]`),
+		chromedp.Sleep(1*time.Second),
+	); err != nil {
+		return err
+	}
+
 	selectors := []string{
 		`input[name='mobile']`,
 		`input[name='password']`,

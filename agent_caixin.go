@@ -256,15 +256,12 @@ func (a *Caixin) login(ctx context.Context) error {
 		return nil
 	}
 
-	logger.Infof("next step: waiting icon to be visible")
-	err := runStep("wait_login_icon_visible",
-		chromedp.WaitVisible(`#app > div > section > div > div:nth-child(1) > div > div > span > svg > use`),
-	)
-	if err != nil {
-		return err
-	}
-	err = runStep("click_login_method_icon",
-		chromedp.Click(`#app > div > section > div > div:nth-child(1) > div > div > span > svg > use`),
+	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
+	logger.Infof("next step: switching to password login")
+	err := runStep("switch_to_password_login",
+		chromedp.WaitVisible(`//h6[contains(text(), '其他方式登录')]`),
+		chromedp.Click(`//h6[contains(text(), '其他方式登录')]`),
+		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return err
