@@ -259,65 +259,122 @@ func (a *Caixin) login(ctx context.Context) error {
 	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
 	logger.Infof("next step: switching to password login")
 	err := runStep("switch_to_password_login",
-		chromedp.WaitVisible(`//h6[contains(text(), '其他方式登录')]`),
-		chromedp.Click(`//h6[contains(text(), '其他方式登录')]`),
-		chromedp.Sleep(1*time.Second),
+		chromedp.WaitVisible(`//*[contains(text(), '其他方式登录')]`),
+		chromedp.Click(`//*[contains(text(), '其他方式登录')]`),
+		chromedp.Sleep(2*time.Second),
 	)
 	if err != nil {
 		return err
 	}
+
+	// Find the mobile input using multiple possible selectors
+	mobileSelectors := []string{
+		`input[name='mobile']`,
+		`input[name='phone']`,
+		`input[type='tel']`,
+		`input[placeholder*='手机']`,
+		`input[placeholder*='号码']`,
+	}
+	mobileSel := ""
+	for _, sel := range mobileSelectors {
+		var nodes []*cdp.Node
+		if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
+			mobileSel = sel
+			logger.Infof("mobile input found with selector: %s", sel)
+			break
+		}
+	}
+	if mobileSel == "" {
+		var pageHTML string
+		_ = chromedp.Run(ctx, chromedp.OuterHTML("html", &pageHTML))
+		if len(pageHTML) > 2000 {
+			pageHTML = pageHTML[:2000]
+		}
+		logger.Errorf("[caixin] login: no mobile input found. Page HTML (truncated): %s", pageHTML)
+		return a.wrapStepErrWithScreenshot(ctx, "login_no_mobile_input", fmt.Errorf("no mobile input selector matched"))
+	}
+
 	logger.Infof("next step: wait mobile input to be visible")
 	err = runStep("wait_mobile_input_visible",
-		chromedp.WaitVisible(`input[name='mobile']`),
+		chromedp.WaitVisible(mobileSel),
 	)
 	if err != nil {
 		return err
 	}
 	err = runStep("focus_mobile_input",
-		chromedp.Focus(`input[name='mobile']`),
+		chromedp.Focus(mobileSel),
 	)
 	if err != nil {
 		return err
 	}
 	logger.Infof("next step: clear mobile input")
 	err = runStep("clear_mobile_input",
-		chromedp.Evaluate(`document.querySelector("input[name='mobile']").value = ""`, nil),
+		chromedp.Evaluate(fmt.Sprintf(`document.querySelector("%s").value = ""`, mobileSel), nil),
 	)
 	if err != nil {
 		return err
 	}
 	logger.Infof("next step: sending mobile number")
 	err = runStep("input_mobile_number",
-		chromedp.SendKeys(`input[name='mobile']`, username),
+		chromedp.SendKeys(mobileSel, username),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return err
 	}
-	logger.Infof("next step: send password")
+
+	// Find password input
+	passwordSel := `input[name='password']`
+	var pwNodes []*cdp.Node
+	if err := chromedp.Run(ctx, chromedp.Nodes(passwordSel, &pwNodes, chromedp.AtLeast(0))); err != nil || len(pwNodes) == 0 {
+		passwordSel = `input[type='password']`
+	}
+	logger.Infof("next step: send password (selector: %s)", passwordSel)
 	err = runStep("input_password",
-		chromedp.SendKeys(`input[name='password']`, password),
+		chromedp.SendKeys(passwordSel, password),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
 		return err
 	}
+
+	// Click consent/agreement checkbox using JavaScript for resilience
+	logger.Infof("next step: click agreement checkbox")
 	err = runStep("click_agreement_checkbox",
-		chromedp.Click(`#app > div > section > div > div.cx-login-argree > label > span > span`),
+		chromedp.Evaluate(`
+			(function(){
+				var cb = document.querySelector(".cx-login-argree input[type='checkbox']");
+				if (cb) { cb.click(); return "checkbox"; }
+				var span = document.querySelector(".cx-login-argree label span span");
+				if (span) { span.click(); return "span"; }
+				var label = document.querySelector(".cx-login-argree label");
+				if (label) { label.click(); return "label"; }
+				var el = document.querySelector("#app > div > section > div > div.cx-login-argree > label > span > span");
+				if (el) { el.click(); return "legacy"; }
+				return "not_found";
+			})()
+		`, nil),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
-		return err
+		logger.Warnf("click_agreement_checkbox failed (non-fatal): %v", err)
 	}
-	logger.Infof("next step: click login button")
+
+	// Click login button
+	loginBtnSel := `button.login-btn`
+	var btnNodes []*cdp.Node
+	if err := chromedp.Run(ctx, chromedp.Nodes(loginBtnSel, &btnNodes, chromedp.AtLeast(0))); err != nil || len(btnNodes) == 0 {
+		loginBtnSel = `button[type='submit']`
+	}
+	logger.Infof("next step: click login button (selector: %s)", loginBtnSel)
 	err = runStep("click_login_button",
-		chromedp.Click(`button.login-btn`),
+		chromedp.Click(loginBtnSel),
 	)
 	if err != nil {
 		return err
 	}
 	err = runStep("wait_login_button_disappear",
-		chromedp.WaitNotPresent(`button.login-btn`),
+		chromedp.WaitNotPresent(loginBtnSel),
 	)
 	if err != nil {
 		return err

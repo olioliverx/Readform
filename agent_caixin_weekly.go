@@ -113,22 +113,68 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 
 	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
 	if err := runStep("login_preflight_switch_to_password",
-		chromedp.WaitVisible(`//h6[contains(text(), '其他方式登录')]`),
-		chromedp.Click(`//h6[contains(text(), '其他方式登录')]`),
-		chromedp.Sleep(1*time.Second),
+		chromedp.WaitVisible(`//*[contains(text(), '其他方式登录')]`),
+		chromedp.Click(`//*[contains(text(), '其他方式登录')]`),
+		chromedp.Sleep(2*time.Second),
 	); err != nil {
 		return err
 	}
 
-	selectors := []string{
-		`input[name='mobile']`,
-		`input[name='password']`,
-		`button.login-btn`,
+	// Click consent/agreement checkbox
+	if err := runStep("login_preflight_consent",
+		chromedp.Evaluate(`
+			(function(){
+				var cb = document.querySelector(".cx-login-argree input[type='checkbox']");
+				if (cb) { cb.click(); return "checkbox"; }
+				var span = document.querySelector(".cx-login-argree label span span");
+				if (span) { span.click(); return "span"; }
+				var label = document.querySelector(".cx-login-argree label");
+				if (label) { label.click(); return "label"; }
+				return "not_found";
+			})()
+		`, nil),
+		chromedp.Sleep(1*time.Second),
+	); err != nil {
+		logger.Warnf("[caixin] preflight consent click failed (non-fatal): %v", err)
 	}
-	for _, selector := range selectors {
+
+	// Try multiple selectors for the mobile input field (Caixin may change these)
+	mobileSelectors := []string{
+		`input[name='mobile']`,
+		`input[name='phone']`,
+		`input[type='tel']`,
+		`input[placeholder*='手机']`,
+		`input[placeholder*='号码']`,
+	}
+	mobileFound := false
+	for _, sel := range mobileSelectors {
 		var nodes []*cdp.Node
-		step := "login_preflight_selector_" + sanitizeForFileName(selector)
-		if err := runStep(step, chromedp.Nodes(selector, &nodes, chromedp.AtLeast(1))); err != nil {
+		if err := chromedp.Run(tabCtx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
+			logger.Infof("[caixin] preflight: mobile input found with selector: %s", sel)
+			mobileFound = true
+			break
+		}
+	}
+	if !mobileFound {
+		// Dump page HTML for debugging
+		var pageHTML string
+		_ = chromedp.Run(tabCtx, chromedp.OuterHTML("html", &pageHTML))
+		if len(pageHTML) > 2000 {
+			pageHTML = pageHTML[:2000]
+		}
+		logger.Errorf("[caixin] preflight: no mobile input found. Page HTML (truncated): %s", pageHTML)
+		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_mobile_input", fmt.Errorf("no mobile input selector matched"))
+	}
+
+	// Verify password input and login button exist
+	otherSelectors := []string{
+		`input[name='password'],input[type='password']`,
+		`button.login-btn,button[type='submit']`,
+	}
+	for _, sel := range otherSelectors {
+		var nodes []*cdp.Node
+		step := "login_preflight_selector_" + sanitizeForFileName(sel)
+		if err := runStep(step, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(1))); err != nil {
 			return err
 		}
 	}
