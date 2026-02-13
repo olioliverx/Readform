@@ -265,6 +265,7 @@ func (a *Caixin) login(ctx context.Context) error {
 	// Try multiple selectors for the mobile input field
 	mobileSelectors := []string{
 		`input[name='mobile']`,
+		`input[placeholder="请输入手机号"]`,
 		`input[name='phone']`,
 		`input[type='tel']`,
 		`input[placeholder*='手机']`,
@@ -285,44 +286,64 @@ func (a *Caixin) login(ctx context.Context) error {
 	// If mobile input not found, toggle from QR code view to account/password form
 	if mobileSel == "" {
 		logger.Infof("next step: switching to password login")
+		var switchResult string
 		if err := runStep("switch_to_password_login",
 			chromedp.Evaluate(`
 				(function(){
-					// Strategy 1: click the switcher icon at top-right of login card
+					// Strategy 1: click the ElementUI "手机号登录" tab directly
+					var mobileTab = document.getElementById('tab-mobile');
+					if (mobileTab) { mobileTab.click(); return "tab-mobile"; }
+
+					// Strategy 2: find tab by text content
+					var tabs = document.querySelectorAll('.el-tabs__item');
+					for (var i = 0; i < tabs.length; i++) {
+						var txt = tabs[i].textContent.trim();
+						if (txt === '手机号登录' || txt === '账号登录' || txt === '密码登录') {
+							tabs[i].click();
+							return "tab_text:" + txt;
+						}
+					}
+
+					// Strategy 3: click the QR-to-account switcher icon (top-right of login card)
 					var switcher = document.querySelector('.cx-icon-switch') ||
+						document.querySelector('.cx-login-switch') ||
 						document.querySelector('.login-switch') ||
 						document.querySelector('.qr-switch');
 					if (switcher) { switcher.click(); return "switcher_icon"; }
 
-					// Strategy 2: look for a clickable element toggling login modes in the login header
-					var spans = document.querySelectorAll('#app span, #app i, #app div');
-					for (var i = 0; i < spans.length; i++) {
-						var el = spans[i];
-						var style = window.getComputedStyle(el);
-						if (style.cursor === 'pointer' && el.offsetWidth > 0 && el.offsetWidth < 60 &&
-							el.offsetHeight > 0 && el.offsetHeight < 60 &&
-							el.getBoundingClientRect().top < 250) {
-							el.click();
-							return "top_clickable:" + el.className;
+					// Strategy 4: look for clickable icon in the top area of the login container
+					var container = document.querySelector('.cx-box-main') ||
+						document.querySelector('.cx-box-container') ||
+						document.querySelector('.cx-box');
+					if (container) {
+						var icons = container.querySelectorAll('img, i, svg');
+						var cRect = container.getBoundingClientRect();
+						for (var j = 0; j < icons.length; j++) {
+							var r = icons[j].getBoundingClientRect();
+							if (r.top < cRect.top + 80 && r.right > cRect.right - 80 &&
+								r.width > 0 && r.width < 60) {
+								icons[j].click();
+								return "container_icon";
+							}
 						}
 					}
 
-					// Strategy 3: click "其他方式登录" text which may reveal a mobile icon to click
-					var otherLogin = null;
+					// Strategy 5: click "其他方式登录" text
 					var allEls = document.querySelectorAll('span, div, a, p');
-					for (var j = 0; j < allEls.length; j++) {
-						if (allEls[j].textContent.trim() === '其他方式登录') {
-							otherLogin = allEls[j];
-							break;
+					for (var k = 0; k < allEls.length; k++) {
+						if (allEls[k].textContent.trim() === '其他方式登录') {
+							allEls[k].click();
+							return "other_login_text";
 						}
 					}
-					if (otherLogin) { otherLogin.click(); return "other_login_text"; }
 					return "not_found";
 				})()
-			`, nil),
+			`, &switchResult),
 			chromedp.Sleep(2*time.Second),
 		); err != nil {
 			logger.Warnf("switch to password login failed (non-fatal): %v", err)
+		} else {
+			logger.Infof("switch to password login result: %s", switchResult)
 		}
 
 		// Poll for mobile input to appear (up to 15 seconds)
