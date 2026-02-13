@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 	"io"
 	"net/http"
@@ -49,7 +48,7 @@ func (a *Caixin) DiscoverArticleURLs(agent *WebsiteAgent, isFirstRun bool) (Cust
 
 	if isFirstRun {
 		if err := a.preflightLogin(agent); err != nil {
-			return CustomDiscoveryResult{}, err
+			logger.Warnf("[caixin] preflight login check failed (non-fatal), continue weekly discovery: %v", err)
 		}
 	}
 
@@ -116,120 +115,45 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 		return err
 	}
 
-	// Try multiple selectors for the mobile input field (Caixin may change these)
-	mobileSelectors := []string{
-		`input[name='mobile']`,
-		`input[placeholder="请输入手机号"]`,
-		`input[name='phone']`,
-		`input[type='tel']`,
-		`input[placeholder*='手机']`,
-		`input[placeholder*='号码']`,
+	usernameSel, err := findFirstVisibleSelector(tabCtx, caixinUsernameInputSelectors)
+	if err != nil {
+		return err
 	}
-
-	// Check if the mobile/password form is already visible
-	mobileFound := false
-	for _, sel := range mobileSelectors {
-		var nodes []*cdp.Node
-		if err := chromedp.Run(tabCtx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
-			logger.Infof("[caixin] preflight: mobile input already visible with selector: %s", sel)
-			mobileFound = true
-			break
-		}
+	if usernameSel != "" {
+		logger.Infof("[caixin] preflight: username input already visible with selector: %s", usernameSel)
 	}
-
-	// If mobile input not found, toggle from QR code view to account/password form
-	if !mobileFound {
-		// Use JavaScript to find and click the login-mode switcher.
-		// The Caixin login page has a switcher icon in the top-right of the login card
-		// that toggles between QR code and account/password views.
-		logger.Infof("[caixin] preflight: mobile input not visible, attempting to switch login mode")
-		var switchResult string
-		if err := runStep("login_preflight_switch_to_password",
-			chromedp.Evaluate(`
-				(function(){
-					// Strategy 1: click the ElementUI "手机号登录" tab directly
-					var mobileTab = document.getElementById('tab-mobile');
-					if (mobileTab) { mobileTab.click(); return "tab-mobile"; }
-
-					// Strategy 2: find tab by text content
-					var tabs = document.querySelectorAll('.el-tabs__item');
-					for (var i = 0; i < tabs.length; i++) {
-						var txt = tabs[i].textContent.trim();
-						if (txt === '手机号登录' || txt === '账号登录' || txt === '密码登录') {
-							tabs[i].click();
-							return "tab_text:" + txt;
-						}
-					}
-
-					// Strategy 3: click the QR-to-account switcher icon (top-right of login card)
-					var switcher = document.querySelector('.cx-icon-switch') ||
-						document.querySelector('.cx-login-switch') ||
-						document.querySelector('.login-switch') ||
-						document.querySelector('.qr-switch');
-					if (switcher) { switcher.click(); return "switcher_icon"; }
-
-					// Strategy 4: look for clickable icon in the top area of the login container
-					var container = document.querySelector('.cx-box-main') ||
-						document.querySelector('.cx-box-container') ||
-						document.querySelector('.cx-box');
-					if (container) {
-						var icons = container.querySelectorAll('img, i, svg');
-						var cRect = container.getBoundingClientRect();
-						for (var j = 0; j < icons.length; j++) {
-							var r = icons[j].getBoundingClientRect();
-							if (r.top < cRect.top + 80 && r.right > cRect.right - 80 &&
-								r.width > 0 && r.width < 60) {
-								icons[j].click();
-								return "container_icon";
-							}
-						}
-					}
-
-					// Strategy 5: click "其他方式登录" text
-					var allEls = document.querySelectorAll('span, div, a, p');
-					for (var k = 0; k < allEls.length; k++) {
-						if (allEls[k].textContent.trim() === '其他方式登录') {
-							allEls[k].click();
-							return "other_login_text";
-						}
-					}
-					return "not_found";
-				})()
-			`, &switchResult),
-			chromedp.Sleep(2*time.Second),
-		); err != nil {
-			logger.Warnf("[caixin] preflight: switch to password login failed (non-fatal): %v", err)
+	if usernameSel == "" {
+		logger.Infof("[caixin] preflight: username input not visible, attempting to switch login mode")
+		switchResult, switchErr := switchCaixinToPasswordLogin(tabCtx)
+		if switchErr != nil {
+			logger.Warnf("[caixin] preflight: switch to password login failed (non-fatal): %v", switchErr)
 		} else {
 			logger.Infof("[caixin] preflight: switch result: %s", switchResult)
 		}
+		_ = chromedp.Run(tabCtx, chromedp.Sleep(1500*time.Millisecond))
 
-		// Poll for mobile input to appear (up to 15 seconds)
-		deadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(deadline) {
-			for _, sel := range mobileSelectors {
-				var nodes []*cdp.Node
-				if err := chromedp.Run(tabCtx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
-					logger.Infof("[caixin] preflight: mobile input found with selector: %s", sel)
-					mobileFound = true
-					break
+		usernameSel, err = waitForVisibleSelector(tabCtx, caixinUsernameInputSelectors, 18*time.Second, func(attempt int) {
+			if attempt > 0 && attempt%3 == 0 {
+				retryResult, retryErr := switchCaixinToPasswordLogin(tabCtx)
+				if retryErr == nil && retryResult != "not_found" {
+					logger.Infof("[caixin] preflight: retry switch result: %s", retryResult)
 				}
 			}
-			if mobileFound {
-				break
-			}
-			time.Sleep(1 * time.Second)
+		})
+		if err != nil {
+			return err
 		}
 	}
 
-	if !mobileFound {
+	if usernameSel == "" {
 		// Dump page HTML for debugging
 		var pageHTML string
 		_ = chromedp.Run(tabCtx, chromedp.OuterHTML("html", &pageHTML))
 		if len(pageHTML) > 2000 {
 			pageHTML = pageHTML[:2000]
 		}
-		logger.Errorf("[caixin] preflight: no mobile input found. Page HTML (truncated): %s", pageHTML)
-		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_mobile_input", fmt.Errorf("no mobile input selector matched"))
+		logger.Errorf("[caixin] preflight: no username input found. Page HTML (truncated): %s", pageHTML)
+		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_username_input", fmt.Errorf("no username input selector matched"))
 	}
 
 	// Click consent/agreement checkbox
@@ -255,16 +179,20 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 	}
 
 	// Verify password input and login button exist
-	otherSelectors := []string{
-		`input[name='password'],input[type='password']`,
-		`button.login-btn,button[type='submit']`,
+	passwordSel, err := findFirstVisibleSelector(tabCtx, caixinPasswordInputSelectors)
+	if err != nil {
+		return err
 	}
-	for _, sel := range otherSelectors {
-		var nodes []*cdp.Node
-		step := "login_preflight_selector_" + sanitizeForFileName(sel)
-		if err := runStep(step, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(1))); err != nil {
-			return err
-		}
+	if passwordSel == "" {
+		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_password_input", fmt.Errorf("no password input selector matched"))
+	}
+
+	loginBtnSel, err := findFirstVisibleSelector(tabCtx, caixinLoginButtonSelectors)
+	if err != nil {
+		return err
+	}
+	if loginBtnSel == "" {
+		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_login_button", fmt.Errorf("no login button selector matched"))
 	}
 
 	return nil

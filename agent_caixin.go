@@ -262,141 +262,74 @@ func (a *Caixin) login(ctx context.Context) error {
 		return err
 	}
 
-	// Try multiple selectors for the mobile input field
-	mobileSelectors := []string{
-		`input[name='mobile']`,
-		`input[placeholder="请输入手机号"]`,
-		`input[name='phone']`,
-		`input[type='tel']`,
-		`input[placeholder*='手机']`,
-		`input[placeholder*='号码']`,
+	usernameSel, err := findFirstVisibleSelector(ctx, caixinUsernameInputSelectors)
+	if err != nil {
+		return err
+	}
+	if usernameSel != "" {
+		logger.Infof("username input already visible with selector: %s", usernameSel)
 	}
 
-	// Check if the mobile/password form is already visible
-	mobileSel := ""
-	for _, sel := range mobileSelectors {
-		var nodes []*cdp.Node
-		if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
-			mobileSel = sel
-			logger.Infof("mobile input already visible with selector: %s", sel)
-			break
-		}
-	}
-
-	// If mobile input not found, toggle from QR code view to account/password form
-	if mobileSel == "" {
+	// If username input not found, keep toggling login mode and re-check.
+	if usernameSel == "" {
 		logger.Infof("next step: switching to password login")
-		var switchResult string
-		if err := runStep("switch_to_password_login",
-			chromedp.Evaluate(`
-				(function(){
-					// Strategy 1: click the ElementUI "手机号登录" tab directly
-					var mobileTab = document.getElementById('tab-mobile');
-					if (mobileTab) { mobileTab.click(); return "tab-mobile"; }
-
-					// Strategy 2: find tab by text content
-					var tabs = document.querySelectorAll('.el-tabs__item');
-					for (var i = 0; i < tabs.length; i++) {
-						var txt = tabs[i].textContent.trim();
-						if (txt === '手机号登录' || txt === '账号登录' || txt === '密码登录') {
-							tabs[i].click();
-							return "tab_text:" + txt;
-						}
-					}
-
-					// Strategy 3: click the QR-to-account switcher icon (top-right of login card)
-					var switcher = document.querySelector('.cx-icon-switch') ||
-						document.querySelector('.cx-login-switch') ||
-						document.querySelector('.login-switch') ||
-						document.querySelector('.qr-switch');
-					if (switcher) { switcher.click(); return "switcher_icon"; }
-
-					// Strategy 4: look for clickable icon in the top area of the login container
-					var container = document.querySelector('.cx-box-main') ||
-						document.querySelector('.cx-box-container') ||
-						document.querySelector('.cx-box');
-					if (container) {
-						var icons = container.querySelectorAll('img, i, svg');
-						var cRect = container.getBoundingClientRect();
-						for (var j = 0; j < icons.length; j++) {
-							var r = icons[j].getBoundingClientRect();
-							if (r.top < cRect.top + 80 && r.right > cRect.right - 80 &&
-								r.width > 0 && r.width < 60) {
-								icons[j].click();
-								return "container_icon";
-							}
-						}
-					}
-
-					// Strategy 5: click "其他方式登录" text
-					var allEls = document.querySelectorAll('span, div, a, p');
-					for (var k = 0; k < allEls.length; k++) {
-						if (allEls[k].textContent.trim() === '其他方式登录') {
-							allEls[k].click();
-							return "other_login_text";
-						}
-					}
-					return "not_found";
-				})()
-			`, &switchResult),
-			chromedp.Sleep(2*time.Second),
-		); err != nil {
-			logger.Warnf("switch to password login failed (non-fatal): %v", err)
+		switchResult, switchErr := switchCaixinToPasswordLogin(ctx)
+		if switchErr != nil {
+			logger.Warnf("switch to password login failed (non-fatal): %v", switchErr)
 		} else {
 			logger.Infof("switch to password login result: %s", switchResult)
 		}
+		_ = chromedp.Run(ctx, chromedp.Sleep(1500*time.Millisecond))
 
-		// Poll for mobile input to appear (up to 15 seconds)
-		deadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(deadline) {
-			for _, sel := range mobileSelectors {
-				var nodes []*cdp.Node
-				if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
-					mobileSel = sel
-					logger.Infof("mobile input found with selector: %s", sel)
-					break
+		usernameSel, err = waitForVisibleSelector(ctx, caixinUsernameInputSelectors, 18*time.Second, func(attempt int) {
+			if attempt > 0 && attempt%3 == 0 {
+				retryResult, retryErr := switchCaixinToPasswordLogin(ctx)
+				if retryErr == nil && retryResult != "not_found" {
+					logger.Infof("retry switch to password login result: %s", retryResult)
 				}
 			}
-			if mobileSel != "" {
-				break
-			}
-			time.Sleep(1 * time.Second)
+		})
+		if err != nil {
+			return err
+		}
+		if usernameSel != "" {
+			logger.Infof("username input found with selector: %s", usernameSel)
 		}
 	}
 
-	if mobileSel == "" {
+	if usernameSel == "" {
 		var pageHTML string
 		_ = chromedp.Run(ctx, chromedp.OuterHTML("html", &pageHTML))
 		if len(pageHTML) > 2000 {
 			pageHTML = pageHTML[:2000]
 		}
-		logger.Errorf("[caixin] login: no mobile input found. Page HTML (truncated): %s", pageHTML)
-		return a.wrapStepErrWithScreenshot(ctx, "login_no_mobile_input", fmt.Errorf("no mobile input selector matched"))
+		logger.Errorf("[caixin] login: no username input found. Page HTML (truncated): %s", pageHTML)
+		return a.wrapStepErrWithScreenshot(ctx, "login_no_username_input", fmt.Errorf("no username input selector matched"))
 	}
 
-	logger.Infof("next step: wait mobile input to be visible")
-	err := runStep("wait_mobile_input_visible",
-		chromedp.WaitVisible(mobileSel),
+	logger.Infof("next step: wait username input to be visible")
+	err = runStep("wait_username_input_visible",
+		chromedp.WaitVisible(usernameSel),
 	)
 	if err != nil {
 		return err
 	}
-	err = runStep("focus_mobile_input",
-		chromedp.Focus(mobileSel),
+	err = runStep("focus_username_input",
+		chromedp.Focus(usernameSel),
 	)
 	if err != nil {
 		return err
 	}
-	logger.Infof("next step: clear mobile input")
-	err = runStep("clear_mobile_input",
-		chromedp.Evaluate(fmt.Sprintf(`document.querySelector("%s").value = ""`, mobileSel), nil),
+	logger.Infof("next step: clear username input")
+	err = runStep("clear_username_input",
+		chromedp.Evaluate(fmt.Sprintf(`(function(){var el=document.querySelector(%q); if (el) { el.value = ""; return true; } return false; })()`, usernameSel), nil),
 	)
 	if err != nil {
 		return err
 	}
-	logger.Infof("next step: sending mobile number")
-	err = runStep("input_mobile_number",
-		chromedp.SendKeys(mobileSel, username),
+	logger.Infof("next step: sending username")
+	err = runStep("input_username",
+		chromedp.SendKeys(usernameSel, username),
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil {
@@ -404,9 +337,11 @@ func (a *Caixin) login(ctx context.Context) error {
 	}
 
 	// Find password input
-	passwordSel := `input[name='password']`
-	var pwNodes []*cdp.Node
-	if err := chromedp.Run(ctx, chromedp.Nodes(passwordSel, &pwNodes, chromedp.AtLeast(0))); err != nil || len(pwNodes) == 0 {
+	passwordSel, err := findFirstVisibleSelector(ctx, caixinPasswordInputSelectors)
+	if err != nil {
+		return err
+	}
+	if passwordSel == "" {
 		passwordSel = `input[type='password']`
 	}
 	logger.Infof("next step: send password (selector: %s)", passwordSel)
@@ -445,9 +380,11 @@ func (a *Caixin) login(ctx context.Context) error {
 	}
 
 	// Click login button
-	loginBtnSel := `button.login-btn`
-	var btnNodes []*cdp.Node
-	if err := chromedp.Run(ctx, chromedp.Nodes(loginBtnSel, &btnNodes, chromedp.AtLeast(0))); err != nil || len(btnNodes) == 0 {
+	loginBtnSel, err := findFirstVisibleSelector(ctx, caixinLoginButtonSelectors)
+	if err != nil {
+		return err
+	}
+	if loginBtnSel == "" {
 		loginBtnSel = `button[type='submit']`
 	}
 	logger.Infof("next step: click login button (selector: %s)", loginBtnSel)

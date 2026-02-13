@@ -34,7 +34,7 @@ Caixin now supports two content modes:
 
 When `weekly_only` is enabled, issue completeness is tracked in local database and unsaved articles are retried until all links in an issue are saved to Readwise.
 
-For login safety, startup includes a Caixin login preflight check (phone/password selectors). If login steps fail due page changes, a diagnostic screenshot will be written under `data/diagnostics/`.
+For login safety, startup includes a Caixin login preflight check (username/password/button selectors). If this check fails due page changes, a warning is logged, a diagnostic screenshot is written under `data/diagnostics/`, and weekly discovery continues.
 
 
 ## Quick start
