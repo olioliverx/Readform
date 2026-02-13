@@ -33,6 +33,7 @@ Caixin now supports two content modes:
 - `weekly_only`: first startup sets the current issue as baseline, ingests the previous complete issue once, then keeps ingesting newer weekly issues.
 
 When `weekly_only` is enabled, issue completeness is tracked in local database and unsaved articles are retried until all links in an issue are saved to Readwise.
+If you set `caixin.rss_links` in config, `weekly_only` will also use those links for weekly RSS supplemental discovery (default fallback remains `https://rsshub.app/caixin/weekly`).
 
 For login safety, startup includes a Caixin login preflight check (username/password/button selectors). If this check fails due page changes, a warning is logged, a diagnostic screenshot is written under `data/diagnostics/`, and weekly discovery continues.
 

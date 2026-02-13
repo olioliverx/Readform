@@ -405,23 +405,52 @@ func (a *Caixin) fetchCaixinWeeklyIssueArticleURLs(issueURL string) ([]string, e
 }
 
 func (a *Caixin) discoverCaixinWeeklyRSSURLs(agent *WebsiteAgent) ([]string, error) {
-	feedItems, err := ParseRssFeed(caixinWeeklyRSSURL)
-	if err != nil {
-		return nil, err
-	}
-
+	rssAddresses := a.getWeeklyRSSAddresses()
 	var urls []string
-	for _, item := range feedItems {
-		if agent != nil && agent.containsBlockedKeyword(item.Title) {
+	var parseErrs []string
+	for _, rssAddress := range rssAddresses {
+		feedItems, err := ParseRssFeed(rssAddress)
+		if err != nil {
+			parseErrs = append(parseErrs, fmt.Sprintf("%s (%v)", rssAddress, err))
 			continue
 		}
-		urls = append(urls, item.Link)
+		for _, item := range feedItems {
+			if agent != nil && agent.containsBlockedKeyword(item.Title) {
+				continue
+			}
+			urls = append(urls, item.Link)
+		}
 	}
+	if len(urls) == 0 && len(parseErrs) > 0 {
+		return nil, fmt.Errorf("all weekly RSS feeds failed: %s", strings.Join(parseErrs, "; "))
+	}
+	if len(parseErrs) > 0 {
+		logger.Warnf("[caixin] some weekly RSS feeds failed: %s", strings.Join(parseErrs, "; "))
+	}
+	var err error
 	urls, err = filterOldURLs(UniqStringSlice(urls))
 	if err != nil {
 		return nil, err
 	}
 	return urls, nil
+}
+
+func (a *Caixin) getWeeklyRSSAddresses() []string {
+	if a.conf == nil || len(a.conf.RSSLinks) == 0 {
+		return []string{caixinWeeklyRSSURL}
+	}
+	custom := make([]string, 0, len(a.conf.RSSLinks))
+	for _, raw := range a.conf.RSSLinks {
+		link := strings.TrimSpace(raw)
+		if link == "" {
+			continue
+		}
+		custom = append(custom, link)
+	}
+	if len(custom) == 0 {
+		return []string{caixinWeeklyRSSURL}
+	}
+	return custom
 }
 
 func fetchWebpageContent(targetURL string) (string, error) {

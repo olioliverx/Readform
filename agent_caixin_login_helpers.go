@@ -111,19 +111,22 @@ func switchCaixinToPasswordLogin(ctx context.Context) (string, error) {
 			var tabs = document.querySelectorAll('.el-tabs__item, [role="tab"], .cx-tab');
 			for (var t = 0; t < targets.length; t++) {
 				for (var i = 0; i < tabs.length; i++) {
-					var tabText = (tabs[i].textContent || '').trim();
-					if (tabText.indexOf(targets[t]) >= 0 && isVisible(tabs[i])) {
+					var tabText = (tabs[i].textContent || '').replace(/\s+/g, '').trim();
+					if (tabText === targets[t] && isVisible(tabs[i])) {
 						tabs[i].click();
 						return 'tab_text:' + tabText;
 					}
 				}
 			}
 
-			var allEls = document.querySelectorAll('button, a, span, div, p, li');
+			var allEls = document.querySelectorAll('button, a, span, label');
 			for (var t2 = 0; t2 < targets.length; t2++) {
 				for (var k = 0; k < allEls.length; k++) {
-					var txt = (allEls[k].textContent || '').trim();
-					if (txt.indexOf(targets[t2]) >= 0 && isVisible(allEls[k])) {
+					var txt = (allEls[k].textContent || '').replace(/\s+/g, '').trim();
+					if (txt.length > 16 || txt.length === 0) {
+						continue;
+					}
+					if (txt === targets[t2] && isVisible(allEls[k])) {
 						allEls[k].click();
 						return 'text:' + txt;
 					}

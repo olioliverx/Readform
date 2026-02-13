@@ -52,7 +52,7 @@ func (a *Caixin) ConfOptions() []ConfMeta {
 		},
 		{
 			ConfigName:        "Custom RSS feed link",
-			ConfigDescription: "Default feed link is https://rsshub.app/caixin/latest. You can replace it with your own wanted feed link. Multiple links should split by comma(,).",
+			ConfigDescription: "Default feed is https://rsshub.app/caixin/latest (latest mode) and https://rsshub.app/caixin/weekly (weekly_only supplemental discovery). You can replace with your own links, split by comma(,).",
 			ConfigKey:         AgentConfKeyRSSLinks,
 			Type:              FieldTypeStringList,
 			Required:          false,
