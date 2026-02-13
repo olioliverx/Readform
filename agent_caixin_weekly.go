@@ -418,7 +418,24 @@ func (a *Caixin) discoverCaixinWeeklyRSSURLs(agent *WebsiteAgent) ([]string, err
 			if agent != nil && agent.containsBlockedKeyword(item.Title) {
 				continue
 			}
-			urls = append(urls, item.Link)
+			link := strings.TrimSpace(item.Link)
+			if link == "" {
+				continue
+			}
+			if isLikelyCaixinArticleURL(link) {
+				urls = append(urls, link)
+				continue
+			}
+			if isLikelyCaixinWeeklyIssueURL(link) {
+				issueArticleURLs, issueErr := a.fetchCaixinWeeklyIssueArticleURLs(link)
+				if issueErr != nil {
+					logger.Warnf("[caixin] expand weekly issue link failed (%s): %v", link, issueErr)
+					continue
+				}
+				urls = append(urls, issueArticleURLs...)
+				continue
+			}
+			logger.Infof("[caixin] skip non-article weekly RSS link: %s", link)
 		}
 	}
 	if len(urls) == 0 && len(parseErrs) > 0 {
@@ -638,6 +655,19 @@ func isLikelyCaixinArticleURL(rawURL string) bool {
 		return false
 	}
 	return true
+}
+
+func isLikelyCaixinWeeklyIssueURL(rawURL string) bool {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsedURL.Hostname())
+	if host != "weekly.caixin.com" {
+		return false
+	}
+	_, _, ok := extractIssueIDAndNumber(parsedURL.String())
+	return ok
 }
 
 func sanitizeForFileName(input string) string {

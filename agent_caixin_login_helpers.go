@@ -98,6 +98,18 @@ func switchCaixinToPasswordLogin(ctx context.Context) (string, error) {
 				var r = el.getBoundingClientRect();
 				return r.width > 0 && r.height > 0;
 			}
+			function maybeClickConsent() {
+				var cb = document.querySelector(".cx-agree-check input[type='checkbox']");
+				if (cb && !cb.checked) { cb.click(); return true; }
+				var cb2 = document.querySelector(".cx-login-argree input[type='checkbox']");
+				if (cb2 && !cb2.checked) { cb2.click(); return true; }
+				var label = document.querySelector(".cx-agree-check label");
+				if (isVisible(label)) { label.click(); return true; }
+				var label2 = document.querySelector(".cx-login-argree label");
+				if (isVisible(label2)) { label2.click(); return true; }
+				return false;
+			}
+			maybeClickConsent();
 
 			var mobileTab = document.getElementById('tab-mobile');
 			if (isVisible(mobileTab)) { mobileTab.click(); return 'tab-mobile'; }
@@ -112,7 +124,7 @@ func switchCaixinToPasswordLogin(ctx context.Context) (string, error) {
 			for (var t = 0; t < targets.length; t++) {
 				for (var i = 0; i < tabs.length; i++) {
 					var tabText = (tabs[i].textContent || '').replace(/\s+/g, '').trim();
-					if (tabText === targets[t] && isVisible(tabs[i])) {
+					if (tabText.length <= 16 && tabText.indexOf(targets[t]) >= 0 && isVisible(tabs[i])) {
 						tabs[i].click();
 						return 'tab_text:' + tabText;
 					}
@@ -126,7 +138,7 @@ func switchCaixinToPasswordLogin(ctx context.Context) (string, error) {
 					if (txt.length > 16 || txt.length === 0) {
 						continue;
 					}
-					if (txt === targets[t2] && isVisible(allEls[k])) {
+					if (txt.indexOf(targets[t2]) >= 0 && isVisible(allEls[k])) {
 						allEls[k].click();
 						return 'text:' + txt;
 					}
