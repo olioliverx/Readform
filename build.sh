@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
 set -eu
 
-docker build --platform linux/amd64 --progress=plain -t fr0der1c/readform:latest .
+PLATFORM="${1:-linux/amd64}"
+docker build --platform "$PLATFORM" --progress=plain -t fr0der1c/readform:latest .

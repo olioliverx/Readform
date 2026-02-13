@@ -1,4 +1,4 @@
-FROM golang:1.21-bullseye
+FROM golang:1.23-bullseye
 LABEL maintainer="frederic.t.chan@gmail.com"
 ENV IS_IN_CONTAINER=1
 EXPOSE 5000 9444
@@ -22,11 +22,8 @@ RUN apt-get update && apt-get install -y \
     && rm /tmp/google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
-COPY go.mod go.sum /var/app/
-RUN go mod download
-
 COPY . /var/app/
-RUN go build -o readform
+RUN go mod tidy && go build -o readform
 
 ENV TZ="Asia/Shanghai"
 
