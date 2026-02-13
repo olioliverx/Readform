@@ -111,31 +111,9 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 		return err
 	}
 
-	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
-	if err := runStep("login_preflight_switch_to_password",
-		chromedp.WaitVisible(`//*[contains(text(), '其他方式登录')]`),
-		chromedp.Click(`//*[contains(text(), '其他方式登录')]`),
-		chromedp.Sleep(2*time.Second),
-	); err != nil {
+	// Caixin login page is a Vue SPA; wait a bit for JS to render
+	if err := runStep("login_preflight_wait_render", chromedp.Sleep(3*time.Second)); err != nil {
 		return err
-	}
-
-	// Click consent/agreement checkbox
-	if err := runStep("login_preflight_consent",
-		chromedp.Evaluate(`
-			(function(){
-				var cb = document.querySelector(".cx-login-argree input[type='checkbox']");
-				if (cb) { cb.click(); return "checkbox"; }
-				var span = document.querySelector(".cx-login-argree label span span");
-				if (span) { span.click(); return "span"; }
-				var label = document.querySelector(".cx-login-argree label");
-				if (label) { label.click(); return "label"; }
-				return "not_found";
-			})()
-		`, nil),
-		chromedp.Sleep(1*time.Second),
-	); err != nil {
-		logger.Warnf("[caixin] preflight consent click failed (non-fatal): %v", err)
 	}
 
 	// Try multiple selectors for the mobile input field (Caixin may change these)
@@ -146,15 +124,82 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 		`input[placeholder*='手机']`,
 		`input[placeholder*='号码']`,
 	}
+
+	// Check if the mobile/password form is already visible
 	mobileFound := false
 	for _, sel := range mobileSelectors {
 		var nodes []*cdp.Node
 		if err := chromedp.Run(tabCtx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
-			logger.Infof("[caixin] preflight: mobile input found with selector: %s", sel)
+			logger.Infof("[caixin] preflight: mobile input already visible with selector: %s", sel)
 			mobileFound = true
 			break
 		}
 	}
+
+	// If mobile input not found, toggle from QR code view to account/password form
+	if !mobileFound {
+		// Use JavaScript to find and click the login-mode switcher.
+		// The Caixin login page has a switcher icon in the top-right of the login card
+		// that toggles between QR code and account/password views.
+		logger.Infof("[caixin] preflight: mobile input not visible, attempting to switch login mode")
+		if err := runStep("login_preflight_switch_to_password",
+			chromedp.Evaluate(`
+				(function(){
+					// Strategy 1: click the switcher icon at top-right of login card
+					var switcher = document.querySelector('.cx-icon-switch') ||
+						document.querySelector('.login-switch') ||
+						document.querySelector('.qr-switch');
+					if (switcher) { switcher.click(); return "switcher_icon"; }
+
+					// Strategy 2: look for a clickable element toggling login modes in the login header
+					var spans = document.querySelectorAll('#app span, #app i, #app div');
+					for (var i = 0; i < spans.length; i++) {
+						var el = spans[i];
+						var style = window.getComputedStyle(el);
+						if (style.cursor === 'pointer' && el.offsetWidth > 0 && el.offsetWidth < 60 &&
+							el.offsetHeight > 0 && el.offsetHeight < 60 &&
+							el.getBoundingClientRect().top < 250) {
+							el.click();
+							return "top_clickable:" + el.className;
+						}
+					}
+
+					// Strategy 3: click "其他方式登录" text which may reveal a mobile icon to click
+					var otherLogin = null;
+					var allEls = document.querySelectorAll('span, div, a, p');
+					for (var j = 0; j < allEls.length; j++) {
+						if (allEls[j].textContent.trim() === '其他方式登录') {
+							otherLogin = allEls[j];
+							break;
+						}
+					}
+					if (otherLogin) { otherLogin.click(); return "other_login_text"; }
+					return "not_found";
+				})()
+			`, nil),
+			chromedp.Sleep(2*time.Second),
+		); err != nil {
+			logger.Warnf("[caixin] preflight: switch to password login failed (non-fatal): %v", err)
+		}
+
+		// Poll for mobile input to appear (up to 15 seconds)
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, sel := range mobileSelectors {
+				var nodes []*cdp.Node
+				if err := chromedp.Run(tabCtx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
+					logger.Infof("[caixin] preflight: mobile input found with selector: %s", sel)
+					mobileFound = true
+					break
+				}
+			}
+			if mobileFound {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	if !mobileFound {
 		// Dump page HTML for debugging
 		var pageHTML string
@@ -164,6 +209,28 @@ func (a *Caixin) preflightLogin(agent *WebsiteAgent) error {
 		}
 		logger.Errorf("[caixin] preflight: no mobile input found. Page HTML (truncated): %s", pageHTML)
 		return a.wrapStepErrWithScreenshot(tabCtx, "login_preflight_no_mobile_input", fmt.Errorf("no mobile input selector matched"))
+	}
+
+	// Click consent/agreement checkbox
+	if err := runStep("login_preflight_consent",
+		chromedp.Evaluate(`
+			(function(){
+				var cb = document.querySelector(".cx-agree-check input[type='checkbox']");
+				if (cb) { cb.click(); return "checkbox"; }
+				var span = document.querySelector(".cx-agree-check label span span");
+				if (span) { span.click(); return "span"; }
+				var label = document.querySelector(".cx-agree-check label");
+				if (label) { label.click(); return "label"; }
+				var cb2 = document.querySelector(".cx-login-argree input[type='checkbox']");
+				if (cb2) { cb2.click(); return "checkbox_legacy"; }
+				var label2 = document.querySelector(".cx-login-argree label");
+				if (label2) { label2.click(); return "label_legacy"; }
+				return "not_found";
+			})()
+		`, nil),
+		chromedp.Sleep(1*time.Second),
+	); err != nil {
+		logger.Warnf("[caixin] preflight consent click failed (non-fatal): %v", err)
 	}
 
 	// Verify password input and login button exist

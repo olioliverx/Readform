@@ -256,18 +256,13 @@ func (a *Caixin) login(ctx context.Context) error {
 		return nil
 	}
 
-	// Caixin login page defaults to QR code; click "其他方式登录" to reveal mobile/password form
-	logger.Infof("next step: switching to password login")
-	err := runStep("switch_to_password_login",
-		chromedp.WaitVisible(`//*[contains(text(), '其他方式登录')]`),
-		chromedp.Click(`//*[contains(text(), '其他方式登录')]`),
-		chromedp.Sleep(2*time.Second),
-	)
-	if err != nil {
+	// Wait for Vue SPA to render
+	logger.Infof("next step: waiting for SPA to render")
+	if err := runStep("wait_render", chromedp.Sleep(3*time.Second)); err != nil {
 		return err
 	}
 
-	// Find the mobile input using multiple possible selectors
+	// Try multiple selectors for the mobile input field
 	mobileSelectors := []string{
 		`input[name='mobile']`,
 		`input[name='phone']`,
@@ -275,15 +270,79 @@ func (a *Caixin) login(ctx context.Context) error {
 		`input[placeholder*='手机']`,
 		`input[placeholder*='号码']`,
 	}
+
+	// Check if the mobile/password form is already visible
 	mobileSel := ""
 	for _, sel := range mobileSelectors {
 		var nodes []*cdp.Node
 		if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
 			mobileSel = sel
-			logger.Infof("mobile input found with selector: %s", sel)
+			logger.Infof("mobile input already visible with selector: %s", sel)
 			break
 		}
 	}
+
+	// If mobile input not found, toggle from QR code view to account/password form
+	if mobileSel == "" {
+		logger.Infof("next step: switching to password login")
+		if err := runStep("switch_to_password_login",
+			chromedp.Evaluate(`
+				(function(){
+					// Strategy 1: click the switcher icon at top-right of login card
+					var switcher = document.querySelector('.cx-icon-switch') ||
+						document.querySelector('.login-switch') ||
+						document.querySelector('.qr-switch');
+					if (switcher) { switcher.click(); return "switcher_icon"; }
+
+					// Strategy 2: look for a clickable element toggling login modes in the login header
+					var spans = document.querySelectorAll('#app span, #app i, #app div');
+					for (var i = 0; i < spans.length; i++) {
+						var el = spans[i];
+						var style = window.getComputedStyle(el);
+						if (style.cursor === 'pointer' && el.offsetWidth > 0 && el.offsetWidth < 60 &&
+							el.offsetHeight > 0 && el.offsetHeight < 60 &&
+							el.getBoundingClientRect().top < 250) {
+							el.click();
+							return "top_clickable:" + el.className;
+						}
+					}
+
+					// Strategy 3: click "其他方式登录" text which may reveal a mobile icon to click
+					var otherLogin = null;
+					var allEls = document.querySelectorAll('span, div, a, p');
+					for (var j = 0; j < allEls.length; j++) {
+						if (allEls[j].textContent.trim() === '其他方式登录') {
+							otherLogin = allEls[j];
+							break;
+						}
+					}
+					if (otherLogin) { otherLogin.click(); return "other_login_text"; }
+					return "not_found";
+				})()
+			`, nil),
+			chromedp.Sleep(2*time.Second),
+		); err != nil {
+			logger.Warnf("switch to password login failed (non-fatal): %v", err)
+		}
+
+		// Poll for mobile input to appear (up to 15 seconds)
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, sel := range mobileSelectors {
+				var nodes []*cdp.Node
+				if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.AtLeast(0))); err == nil && len(nodes) > 0 {
+					mobileSel = sel
+					logger.Infof("mobile input found with selector: %s", sel)
+					break
+				}
+			}
+			if mobileSel != "" {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	if mobileSel == "" {
 		var pageHTML string
 		_ = chromedp.Run(ctx, chromedp.OuterHTML("html", &pageHTML))
@@ -295,7 +354,7 @@ func (a *Caixin) login(ctx context.Context) error {
 	}
 
 	logger.Infof("next step: wait mobile input to be visible")
-	err = runStep("wait_mobile_input_visible",
+	err := runStep("wait_mobile_input_visible",
 		chromedp.WaitVisible(mobileSel),
 	)
 	if err != nil {
@@ -343,12 +402,16 @@ func (a *Caixin) login(ctx context.Context) error {
 	err = runStep("click_agreement_checkbox",
 		chromedp.Evaluate(`
 			(function(){
-				var cb = document.querySelector(".cx-login-argree input[type='checkbox']");
+				var cb = document.querySelector(".cx-agree-check input[type='checkbox']");
 				if (cb) { cb.click(); return "checkbox"; }
-				var span = document.querySelector(".cx-login-argree label span span");
+				var span = document.querySelector(".cx-agree-check label span span");
 				if (span) { span.click(); return "span"; }
-				var label = document.querySelector(".cx-login-argree label");
+				var label = document.querySelector(".cx-agree-check label");
 				if (label) { label.click(); return "label"; }
+				var cb2 = document.querySelector(".cx-login-argree input[type='checkbox']");
+				if (cb2) { cb2.click(); return "checkbox_legacy"; }
+				var label2 = document.querySelector(".cx-login-argree label");
+				if (label2) { label2.click(); return "label_legacy"; }
 				var el = document.querySelector("#app > div > section > div > div.cx-login-argree > label > span > span");
 				if (el) { el.click(); return "legacy"; }
 				return "not_found";
